@@ -79,6 +79,21 @@ def process_day(raw_entry: str, day: str | None = None) -> str:
         text_blocks = [b.text for b in response.content if b.type == "text"]
         final_text_parts.extend(text_blocks)
 
+        # Log every block type so tool usage is observable, including
+        # server-side tools like web_search which do NOT show up as
+        # type == "tool_use" (they're "server_tool_use" /
+        # "web_search_tool_result"). Without this, web_search calls happen
+        # invisibly inside the API response and you can't tell whether the
+        # model is using it judiciously or not at all.
+        for b in response.content:
+            if b.type == "server_tool_use":
+                print(f"  [web_search called] query: {b.input.get('query')!r}")
+            elif b.type == "web_search_tool_result":
+                n = len(b.content) if isinstance(b.content, list) else "?"
+                print(f"  [web_search result] {n} result(s) returned")
+            elif b.type == "tool_use":
+                print(f"  [tool call] {b.name}({b.input})")
+
         if not tool_uses:
             break  # model is done, no more tools requested
 
