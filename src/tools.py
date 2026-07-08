@@ -70,8 +70,45 @@ TOOL_SCHEMAS = [
                         "other": {"type": "string"},
                     },
                 },
+                "clarifications": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Resolved clarifying exchanges from ask_user, one per "
+                        "string as 'Q: ... A: ...'. Include these when a food "
+                        "was ambiguous and the user told you what it actually "
+                        "was, so the correction is saved to history."
+                    ),
+                },
             },
             "required": ["day"],
+        },
+    },
+    {
+        "name": "ask_user",
+        "description": (
+            "Ask the user ONE short clarifying question about an ambiguous item "
+            "in today's entry and get their answer back before you finish. Use "
+            "this only when a logged food or exposure is ambiguous in a way that "
+            "materially changes gluten risk — e.g. whether a 'bagel' was gluten-"
+            "free or a regular one, whether soy sauce was gluten-free tamari, or "
+            "whether a restaurant dish was ordered from a gluten-free menu. Do "
+            "NOT ask about things that don't affect gluten exposure. After you "
+            "get the answer, call record_parsed_entry again for the same day "
+            "with the clarified foods and the resolved 'Q: ... A: ...' added to "
+            "`clarifications`, so the correction is persisted. This tool is for "
+            "factual clarification of what was eaten only — never use it to ask "
+            "for, or to give, medical advice."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The single clarifying question to ask the user.",
+                }
+            },
+            "required": ["question"],
         },
     },
     {
@@ -123,6 +160,7 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
             foods=tool_input.get("foods", []),
             symptoms=symptoms,
             confounders=confounders,
+            clarifications=tool_input.get("clarifications", []),
         )
         # replace any existing entry for the same day (idempotent re-runs)
         state.entries = [e for e in state.entries if e.day != entry.day]

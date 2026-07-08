@@ -29,6 +29,7 @@ def load_state() -> StateFile:
             foods=e.get("foods", []),
             symptoms=symptoms,
             confounders=confounders,
+            clarifications=e.get("clarifications", []),
         ))
 
     patterns = [FlaggedPattern(**p) for p in raw.get("flagged_patterns", [])]

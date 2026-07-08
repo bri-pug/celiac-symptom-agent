@@ -60,7 +60,7 @@ Daily log entry (plain text)
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # then add your ANTHROPIC_API_KEY
+# then add your ANTHROPIC_API_KEY to .env
 ```
 
 ## Running the demo

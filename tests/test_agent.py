@@ -7,7 +7,6 @@ and manual review of the transcript rather than a unit test — see README.
 """
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -50,6 +49,31 @@ def test_reentry_same_day_is_idempotent(tmp_path, monkeypatch):
 
     state = state_store.load_state()
     assert len(state.entries) == 1  # second call replaces, doesn't duplicate
+
+
+def test_clarifications_round_trip(tmp_path, monkeypatch):
+    """A clarified entry (e.g. 'the bagel was a regular one') persists and
+    survives a save/load round trip, so the correction isn't lost."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    run_tool(
+        "record_parsed_entry",
+        {
+            "day": "2026-07-01",
+            "foods": ["regular bagel (contains gluten)", "cream cheese"],
+            "clarifications": ["Q: Was the bagel gluten-free? A: No, a regular bagel."],
+        },
+        today="2026-07-01",
+    )
+
+    state = state_store.load_state()
+    assert len(state.entries) == 1
+    assert state.entries[0].clarifications == [
+        "Q: Was the bagel gluten-free? A: No, a regular bagel."
+    ]
+    # Older entries with no clarifications still default cleanly.
+    assert "regular bagel (contains gluten)" in state.entries[0].foods
 
 
 def test_flag_pattern_records_confounders(tmp_path, monkeypatch):

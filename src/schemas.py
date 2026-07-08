@@ -22,6 +22,11 @@ class Entry(BaseModel):
     foods: list[str]
     symptoms: list[Symptom]
     confounders: Confounders
+    # Resolved "was this X gluten-free?" exchanges, saved as human-readable
+    # "Q: ... A: ..." strings so a later re-run can see how an ambiguous
+    # food was disambiguated. Optional/additive: old state.json files that
+    # predate this field load fine (see state_store.load_state).
+    clarifications: list[str] = []
 
 
 class FlaggedPattern(BaseModel):

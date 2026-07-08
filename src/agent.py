@@ -8,8 +8,8 @@ calls, feed results back, and let it keep going until it produces a final
 text response. This is a genuine multi-step tool-use loop, not a single
 function-calling round trip.
 """
-import os
 from datetime import date
+from typing import Callable, Optional
 
 from anthropic import Anthropic
 
@@ -43,6 +43,13 @@ Hard rules:
   enough.
 - Always call record_parsed_entry once for today's entry, even if nothing \
   seems noteworthy.
+- If today's entry contains an item whose gluten status is genuinely \
+  ambiguous in a way that would change your assessment (a plain "bagel" with \
+  no GF/regular note, an unspecified restaurant dish, a sauce that may or may \
+  not contain gluten), call ask_user to ask ONE short clarifying question, \
+  then re-record the day with the clarified detail and the resolved question \
+  in `clarifications`. Only ask when the answer would actually change what \
+  you record or flag; never ask for or offer medical advice.
 - Use web_search only for general reference facts (e.g. "is soy sauce \
   typically gluten-free", "typical symptom lag time for celiac exposure"), \
   never to give this specific person personalized medical advice.
@@ -51,9 +58,34 @@ Hard rules:
 """
 
 
-def process_day(raw_entry: str, day: str | None = None) -> str:
-    """Run one full agent turn for a single day's log entry."""
+def _terminal_ask(question: str) -> str:
+    """Default ask_user handler: prompt the person at the terminal.
+
+    Returns "" if there is no interactive stdin (e.g. piped input, CI), so
+    the agent loop never hangs on input() — it just proceeds without the
+    clarification instead.
+    """
+    print(f"\n  [agent asks] {question}")
+    try:
+        return input("  your answer > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def process_day(
+    raw_entry: str,
+    day: str | None = None,
+    ask_user: Optional[Callable[[str], str]] = None,
+) -> str:
+    """Run one full agent turn for a single day's log entry.
+
+    `ask_user` handles the interactive `ask_user` tool: it takes the model's
+    clarifying question and returns the user's answer. Injectable so tests
+    and non-interactive callers can supply their own; defaults to a terminal
+    prompt.
+    """
     day = day or date.today().isoformat()
+    ask_user = ask_user or _terminal_ask
 
     client = Anthropic()
 
@@ -72,7 +104,9 @@ def process_day(raw_entry: str, day: str | None = None) -> str:
     final_text_parts = []
 
     # The loop: keep going as long as the model wants to call tools.
-    for _ in range(8):  # hard cap so a misbehaving loop can't run forever
+    # Cap leaves room for a clarify -> re-record round on top of the usual
+    # read_history / record / flag sequence.
+    for _ in range(10):  # hard cap so a misbehaving loop can't run forever
         response = client.messages.create(
             model=MODEL,
             max_tokens=1500,
@@ -110,7 +144,13 @@ def process_day(raw_entry: str, day: str | None = None) -> str:
             if call.name == "web_search":
                 # native tool: Claude executes this server-side, nothing to do
                 continue
-            result_text = run_tool(call.name, call.input, today=day)
+            if call.name == "ask_user":
+                # Client-side interactive tool: put the model's question to
+                # the user and feed their answer back as the tool result.
+                answer = ask_user(call.input.get("question", ""))
+                result_text = answer or "(no answer provided)"
+            else:
+                result_text = run_tool(call.name, call.input, today=day)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": call.id,
