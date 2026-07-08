@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import state_store
+from src.agent import _ensure_entry_recorded
 from src.tools import run_tool
 
 
@@ -49,6 +50,39 @@ def test_reentry_same_day_is_idempotent(tmp_path, monkeypatch):
 
     state = state_store.load_state()
     assert len(state.entries) == 1  # second call replaces, doesn't duplicate
+
+
+def test_safety_net_records_missing_day(tmp_path, monkeypatch):
+    """If the model never recorded the day, the safety net saves a minimal
+    fallback entry that preserves the raw text — the day must not vanish."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    _ensure_entry_recorded("2026-07-01", "Had a mystery bagel, felt off.")
+
+    state = state_store.load_state()
+    assert len(state.entries) == 1
+    assert state.entries[0].day == "2026-07-01"
+    assert state.entries[0].raw_text == "Had a mystery bagel, felt off."
+    assert state.entries[0].foods == []  # minimal — nothing parsed
+
+
+def test_safety_net_does_not_clobber_recorded_day(tmp_path, monkeypatch):
+    """If the model already recorded the day, the safety net is a no-op and
+    must not overwrite the parsed entry with an empty fallback."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    run_tool(
+        "record_parsed_entry",
+        {"day": "2026-07-01", "foods": ["GF bagel"]},
+        today="2026-07-01",
+    )
+    _ensure_entry_recorded("2026-07-01", "raw text that should be ignored")
+
+    state = state_store.load_state()
+    assert len(state.entries) == 1  # not duplicated
+    assert state.entries[0].foods == ["GF bagel"]  # parsed entry preserved
 
 
 def test_clarifications_round_trip(tmp_path, monkeypatch):

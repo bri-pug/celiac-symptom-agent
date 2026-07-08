@@ -58,6 +58,38 @@ Hard rules:
 """
 
 
+def _ensure_entry_recorded(day: str, raw_entry: str) -> None:
+    """Guarantee an entry exists for `day`, recording a fallback if not.
+
+    The entire lagged-pattern premise depends on a COMPLETE daily history,
+    but "always call record_parsed_entry" is only a prompt instruction — the
+    model can skip it, or the loop can hit its iteration cap before it does.
+    This makes the invariant deterministic: if nothing was persisted for the
+    day, save a minimal entry that preserves the raw text (so it can be
+    re-parsed later) rather than letting the day vanish from history.
+    """
+    from .state_store import load_state, save_state
+    from .schemas import Entry, Confounders
+
+    state = load_state()
+    if any(e.day == day for e in state.entries):
+        return  # model already recorded it — nothing to do
+
+    print(
+        f"  [safety net] model recorded no entry for {day}; saving raw text "
+        f"as a minimal fallback so the day isn't lost from history."
+    )
+    state.entries.append(Entry(
+        day=day,
+        raw_text=raw_entry,
+        foods=[],
+        symptoms=[],
+        confounders=Confounders(),
+    ))
+    state.entries.sort(key=lambda e: e.day)
+    save_state(state)
+
+
 def _terminal_ask(question: str) -> str:
     """Default ask_user handler: prompt the person at the terminal.
 
@@ -161,6 +193,10 @@ def process_day(
             messages.append({"role": "user", "content": tool_results})
         elif response.stop_reason == "end_turn":
             break
+
+    # Safety net: never let a day silently drop out of history, even if the
+    # model failed to call record_parsed_entry above.
+    _ensure_entry_recorded(day, raw_entry)
 
     return "\n".join(final_text_parts) if final_text_parts else "(no summary produced)"
 
