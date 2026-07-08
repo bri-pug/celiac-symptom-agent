@@ -119,6 +119,10 @@ TOOL_SCHEMAS = [
             "list any confounders (poor sleep, high stress, travel) "
             "present on the evidence days that you could NOT rule out, and "
             "your confidence must be lower when such confounders are present. "
+            "Re-flagging a hypothesis you have already flagged UPDATES that "
+            "record (merging in the new evidence days) instead of creating a "
+            "duplicate, so it is safe to refine a pattern as more evidence "
+            "accrues. "
             "Never phrase this as a diagnosis — always frame it as something "
             "worth discussing with a doctor or dietitian."
         ),
@@ -170,12 +174,40 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
         return f"Recorded entry for {entry.day}."
 
     if name == "flag_pattern":
+        hypothesis = tool_input["hypothesis"]
+        evidence_days = tool_input.get("evidence_days", [])
+        confounders = tool_input.get("confounders_not_ruled_out", [])
+
+        # Dedup by normalized hypothesis text. Re-running a day, or the model
+        # refining a hypothesis as evidence accrues, must UPDATE the existing
+        # pattern in place — appending would fill the weekly report with
+        # near-duplicate entries. Evidence days and confounders merge as a
+        # union; the latest confidence is taken as the model's current call.
+        key = hypothesis.strip().lower()
+        existing = next(
+            (p for p in state.flagged_patterns if p.hypothesis.strip().lower() == key),
+            None,
+        )
+        if existing is not None:
+            existing.evidence_days = sorted(set(existing.evidence_days) | set(evidence_days))
+            existing.confounders_not_ruled_out = sorted(
+                set(existing.confounders_not_ruled_out) | set(confounders)
+            )
+            existing.confidence = tool_input["confidence"]
+            existing.day_flagged = today
+            save_state(state)
+            return (
+                f"Updated existing pattern: {existing.hypothesis} "
+                f"(confidence: {existing.confidence}, "
+                f"{len(existing.evidence_days)} evidence day(s))"
+            )
+
         pattern = FlaggedPattern(
             day_flagged=today,
-            hypothesis=tool_input["hypothesis"],
-            evidence_days=tool_input.get("evidence_days", []),
+            hypothesis=hypothesis,
+            evidence_days=sorted(set(evidence_days)),
             confidence=tool_input["confidence"],
-            confounders_not_ruled_out=tool_input.get("confounders_not_ruled_out", []),
+            confounders_not_ruled_out=sorted(set(confounders)),
         )
         state.flagged_patterns.append(pattern)
         save_state(state)
