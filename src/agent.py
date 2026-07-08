@@ -8,14 +8,32 @@ calls, feed results back, and let it keep going until it produces a final
 text response. This is a genuine multi-step tool-use loop, not a single
 function-calling round trip.
 """
+import time
 from datetime import date
 from typing import Callable, Optional
 
-from anthropic import Anthropic
+from anthropic import (
+    Anthropic,
+    APIConnectionError,
+    APIError,
+    APITimeoutError,
+    InternalServerError,
+    RateLimitError,
+)
 
 from .tools import TOOL_SCHEMAS, run_tool
 
 MODEL = "claude-sonnet-5"
+
+# Transient API failures worth retrying. Other APIErrors (bad request, auth,
+# etc.) won't succeed on retry and are re-raised immediately.
+_RETRYABLE_ERRORS = (
+    RateLimitError,
+    APIConnectionError,
+    APITimeoutError,
+    InternalServerError,
+)
+_MAX_API_ATTEMPTS = 4
 
 SYSTEM_PROMPT = """You are a symptom-and-trigger pattern assistant for someone \
 managing a chronic condition (e.g. celiac disease). Your job is to help them \
@@ -56,6 +74,29 @@ Hard rules:
 - End your turn with a short plain-language summary of what you did and any \
   hypothesis you flagged (or "nothing new to flag today" if applicable).
 """
+
+
+def _create_with_retry(client: Anthropic, **kwargs):
+    """Call messages.create with exponential backoff on transient errors.
+
+    A single rate-limit or 5xx shouldn't throw away a whole day's turn.
+    SDK-level retries are disabled where the client is built, so this is the
+    one place retry policy lives. Non-retryable errors (bad request, auth)
+    propagate immediately — retrying them would just waste time.
+    """
+    delay = 1.0
+    for attempt in range(1, _MAX_API_ATTEMPTS + 1):
+        try:
+            return client.messages.create(**kwargs)
+        except _RETRYABLE_ERRORS as e:
+            if attempt == _MAX_API_ATTEMPTS:
+                raise
+            print(
+                f"  [retry] transient API error ({type(e).__name__}); "
+                f"attempt {attempt}/{_MAX_API_ATTEMPTS}, retrying in {delay:.0f}s"
+            )
+            time.sleep(delay)
+            delay *= 2
 
 
 def _ensure_entry_recorded(day: str, raw_entry: str) -> None:
@@ -119,7 +160,9 @@ def process_day(
     day = day or date.today().isoformat()
     ask_user = ask_user or _terminal_ask
 
-    client = Anthropic()
+    # Retries are handled by _create_with_retry (below), so disable the SDK's
+    # own retry layer to keep retry policy in one place.
+    client = Anthropic(max_retries=0)
 
     messages = [
         {
@@ -134,18 +177,28 @@ def process_day(
     tools = TOOL_SCHEMAS + [{"type": "web_search_20250305", "name": "web_search"}]
 
     final_text_parts = []
+    api_error = None
 
     # The loop: keep going as long as the model wants to call tools.
     # Cap leaves room for a clarify -> re-record round on top of the usual
     # read_history / record / flag sequence.
     for _ in range(10):  # hard cap so a misbehaving loop can't run forever
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1500,
-            system=SYSTEM_PROMPT,
-            tools=tools,
-            messages=messages,
-        )
+        try:
+            response = _create_with_retry(
+                client,
+                model=MODEL,
+                max_tokens=1500,
+                system=SYSTEM_PROMPT,
+                tools=tools,
+                messages=messages,
+            )
+        except APIError as e:
+            # Retries exhausted (or a non-retryable error). Don't crash the
+            # whole run — break out so the safety net below still preserves
+            # the raw entry, and a demo replaying many days can continue.
+            api_error = e
+            print(f"  [api error] giving up on {day} after retries: {e}")
+            break
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         text_blocks = [b.text for b in response.content if b.type == "text"]
@@ -195,9 +248,15 @@ def process_day(
             break
 
     # Safety net: never let a day silently drop out of history, even if the
-    # model failed to call record_parsed_entry above.
+    # model failed to call record_parsed_entry above (including when the API
+    # was unreachable).
     _ensure_entry_recorded(day, raw_entry)
 
+    if not final_text_parts and api_error is not None:
+        return (
+            f"(API error on {day}; raw entry saved to history but not "
+            f"analyzed — {type(api_error).__name__})"
+        )
     return "\n".join(final_text_parts) if final_text_parts else "(no summary produced)"
 
 
