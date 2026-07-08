@@ -129,3 +129,84 @@ def test_flag_pattern_records_confounders(tmp_path, monkeypatch):
     assert len(state.flagged_patterns) == 1
     assert state.flagged_patterns[0].confidence == "medium"
     assert "stress" in state.flagged_patterns[0].confounders_not_ruled_out
+
+
+def test_flag_pattern_dedups_and_merges(tmp_path, monkeypatch):
+    """Re-flagging the same hypothesis updates the existing record and merges
+    evidence days, rather than appending a duplicate."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    run_tool(
+        "flag_pattern",
+        {
+            "hypothesis": "Soy sauce may correlate with bloating",
+            "evidence_days": ["2026-07-01", "2026-07-03"],
+            "confidence": "medium",
+        },
+        today="2026-07-04",
+    )
+    # Same hypothesis (different casing/whitespace), new evidence day + higher
+    # confidence — should merge into the single existing pattern.
+    run_tool(
+        "flag_pattern",
+        {
+            "hypothesis": "  soy sauce may correlate with bloating  ",
+            "evidence_days": ["2026-07-03", "2026-07-07"],
+            "confidence": "high",
+        },
+        today="2026-07-07",
+    )
+
+    state = state_store.load_state()
+    assert len(state.flagged_patterns) == 1  # merged, not duplicated
+    p = state.flagged_patterns[0]
+    assert p.evidence_days == ["2026-07-01", "2026-07-03", "2026-07-07"]  # union, sorted
+    assert p.confidence == "high"  # latest judgment wins
+    assert p.day_flagged == "2026-07-07"  # updated to last-touched day
+
+
+def test_flag_pattern_keeps_distinct_hypotheses_separate(tmp_path, monkeypatch):
+    """Genuinely different hypotheses are not collapsed into one."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    for hyp in ("Soy sauce may correlate with bloating",
+                "Oats may correlate with fatigue"):
+        run_tool(
+            "flag_pattern",
+            {"hypothesis": hyp, "evidence_days": ["2026-07-01", "2026-07-03"],
+             "confidence": "medium"},
+            today="2026-07-04",
+        )
+
+    state = state_store.load_state()
+    assert len(state.flagged_patterns) == 2
+
+
+def test_create_with_retry_recovers_from_transient_error(monkeypatch):
+    """The API retry wrapper retries transient errors with backoff and
+    returns the eventual success, instead of throwing away the turn."""
+    import httpx
+    from anthropic import APIConnectionError
+
+    from src import agent
+
+    monkeypatch.setattr(agent.time, "sleep", lambda _s: None)  # no real waiting
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    calls = {"n": 0}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise APIConnectionError(message="boom", request=req)
+            return "ok"
+
+    class FakeClient:
+        messages = FakeMessages()
+
+    result = agent._create_with_retry(FakeClient())
+    assert result == "ok"
+    assert calls["n"] == 3  # failed twice, succeeded on the third attempt
