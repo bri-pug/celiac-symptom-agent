@@ -19,7 +19,7 @@ When touching any of the following, apply these rules:
 1. Never phrase output as causal ("X causes Y"). Always correlational
    ("X may be linked to Y", "worth checking whether...").
 2. Every flagged pattern must carry a `confidence` level and, if any
-   confounder (sleep, stress, travel, cycle, illness) was present on an
+   confounder (sleep, stress, travel, illness) was present on an
    evidence day and not ruled out, it must be listed in
    `confounders_not_ruled_out`. Confidence must be lower when confounders
    are present — never `"high"` if a confounder wasn't ruled out.

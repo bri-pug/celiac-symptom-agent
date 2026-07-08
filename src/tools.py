@@ -67,7 +67,6 @@ TOOL_SCHEMAS = [
                         "sleep_hours": {"type": "number"},
                         "stress_level": {"type": "integer", "minimum": 1, "maximum": 5},
                         "travel": {"type": "boolean"},
-                        "menstrual_cycle_relevant": {"type": "boolean"},
                         "other": {"type": "string"},
                     },
                 },
@@ -80,7 +79,7 @@ TOOL_SCHEMAS = [
         "description": (
             "Record a candidate trigger/symptom hypothesis. Only call this when "
             "there is real recurring evidence across multiple days. You MUST "
-            "list any confounders (poor sleep, high stress, travel, cycle) "
+            "list any confounders (poor sleep, high stress, travel) "
             "present on the evidence days that you could NOT rule out, and "
             "your confidence must be lower when such confounders are present. "
             "Never phrase this as a diagnosis — always frame it as something "

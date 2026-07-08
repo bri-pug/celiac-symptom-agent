@@ -7,7 +7,7 @@ pretending to be a doctor.
 **This is not a medical device and does not diagnose anything.** It surfaces
 correlational hypotheses ("3 of your last 4 flare-ups followed meals containing X")
 for you to raise with your doctor or dietitian. It explicitly tracks confounders
-(sleep, stress, cycle, travel, etc.) and lowers its confidence when it can't rule
+(sleep, stress, travel, etc.) and lowers its confidence when it can't rule
 them out, rather than presenting a bare conclusion.
 
 ## Why this is "agentic" and not just a script

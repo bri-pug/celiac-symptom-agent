@@ -29,8 +29,13 @@ Hard rules:
 - Celiac reactions can lag 1-3 days behind exposure. Always check history \
   across a multi-day window before concluding there is no pattern, and \
   before flagging one.
+- Celiac reactions can also continue for several days after exposure. If a \
+  symptom is still present, check for foods eaten in the last 1-3 days, not \
+  just today.
+- Check for foods that are commonly cross-contaminated with gluten (soy sauce, \
+  malt vinegar, Worcestershire sauce) or foods that are likely to contain gluten.
 - Before flagging any pattern, explicitly check for confounders (poor sleep, \
-  high stress, travel, menstrual cycle, illness) on the evidence days. If a \
+  high stress, travel, illness) on the evidence days. If a \
   confounder is present and not ruled out, your confidence must be lower, \
   and you must list it in confounders_not_ruled_out.
 - Only call flag_pattern when there is real recurring evidence (at least 2 \
@@ -49,6 +54,7 @@ Hard rules:
 def process_day(raw_entry: str, day: str | None = None) -> str:
     """Run one full agent turn for a single day's log entry."""
     day = day or date.today().isoformat()
+
     client = Anthropic()
 
     messages = [
