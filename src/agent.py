@@ -10,7 +10,6 @@ function-calling round trip.
 """
 import time
 from datetime import date
-from typing import Callable, Optional
 
 from anthropic import (
     Anthropic,
@@ -61,18 +60,20 @@ Hard rules:
   enough.
 - Always call record_parsed_entry once for today's entry, even if nothing \
   seems noteworthy.
-- If today's entry contains an item whose gluten status is genuinely \
+- Use web_search only for general reference facts (e.g. "is soy sauce \
+  typically gluten-free", "typical symptom lag time for celiac exposure"), \
+  never to give this specific person personalized medical advice.
+- End your turn with a short plain-language summary of what you did and any \
+  hypothesis you flagged (or "nothing new to flag today" if applicable).
+"""
+
+ASK_USER_BULLET="""- If today's entry contains an item whose gluten status is genuinely \
   ambiguous in a way that would change your assessment (a plain "bagel" with \
   no GF/regular note, an unspecified restaurant dish, a sauce that may or may \
   not contain gluten), call ask_user to ask ONE short clarifying question, \
   then re-record the day with the clarified detail and the resolved question \
   in `clarifications`. Only ask when the answer would actually change what \
   you record or flag; never ask for or offer medical advice.
-- Use web_search only for general reference facts (e.g. "is soy sauce \
-  typically gluten-free", "typical symptom lag time for celiac exposure"), \
-  never to give this specific person personalized medical advice.
-- End your turn with a short plain-language summary of what you did and any \
-  hypothesis you flagged (or "nothing new to flag today" if applicable).
 """
 
 
@@ -131,7 +132,7 @@ def _ensure_entry_recorded(day: str, raw_entry: str) -> None:
     save_state(state)
 
 
-def _terminal_ask(question: str) -> str:
+def terminal_ask(question: str) -> str:
     """Default ask_user handler: prompt the person at the terminal.
 
     Returns "" if there is no interactive stdin (e.g. piped input, CI), so
@@ -148,17 +149,14 @@ def _terminal_ask(question: str) -> str:
 def process_day(
     raw_entry: str,
     day: str | None = None,
-    ask_user: Optional[Callable[[str], str]] = None,
+    ask_user: bool = True,
 ) -> str:
     """Run one full agent turn for a single day's log entry.
 
-    `ask_user` handles the interactive `ask_user` tool: it takes the model's
-    clarifying question and returns the user's answer. Injectable so tests
-    and non-interactive callers can supply their own; defaults to a terminal
-    prompt.
+    `ask_user` determines if the agent should prompt the user
+    for additional information.
     """
     day = day or date.today().isoformat()
-    ask_user = ask_user or _terminal_ask
 
     # Retries are handled by _create_with_retry (below), so disable the SDK's
     # own retry layer to keep retry policy in one place.
@@ -175,6 +173,31 @@ def process_day(
     ]
 
     tools = TOOL_SCHEMAS + [{"type": "web_search_20250305", "name": "web_search"}]
+    system_prompt = SYSTEM_PROMPT
+
+    if not ask_user:
+        # If we do no want to prompt the user to add more info,
+        # remove the ask_user tool, which we know exists
+        ask_user_tool_index = [
+            i for i, tool in enumerate(tools) if tool["name"] == "ask_user"
+        ][0]
+        tools.pop(ask_user_tool_index)
+    else:
+        # If we do want to prompt the user to add more info,
+        # add the ask_user bullet to the system prompt
+        system_prompt = system_prompt + ASK_USER_BULLET
+
+    # Cache the stable prefix (tools + system prompt). Render order is
+    # tools -> system -> messages, so a cache_control breakpoint on the last
+    # system block caches the tools AND the system prompt together. This prefix
+    # is byte-identical across every iteration of the loop below (and across
+    # days, since the prompt and tools don't change), while the volatile
+    # per-day content lives in `messages` after it. Each day makes several tool
+    # round-trips that all re-send this prefix, so the cache is read far more
+    # than the ~2-request break-even: a net cost saving, not an increase.
+    system = [
+        {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
+    ]
 
     final_text_parts = []
     api_error = None
@@ -188,7 +211,7 @@ def process_day(
                 client,
                 model=MODEL,
                 max_tokens=1500,
-                system=SYSTEM_PROMPT,
+                system=system,
                 tools=tools,
                 messages=messages,
             )
@@ -199,6 +222,18 @@ def process_day(
             api_error = e
             print(f"  [api error] giving up on {day} after retries: {e}")
             break
+
+        # Cache observability: `cache_read_input_tokens` should be 0 on the
+        # first call (prefix written) and >0 on every later call in the loop
+        # (prefix served from cache at ~0.1x cost). If it stays 0, the prefix
+        # is either below Sonnet's ~2048-token minimum or a silent invalidator
+        # is changing it between calls.
+        usage = response.usage
+        print(
+            f"  [cache] read={usage.cache_read_input_tokens} "
+            f"write={usage.cache_creation_input_tokens} "
+            f"uncached_input={usage.input_tokens}"
+        )
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         text_blocks = [b.text for b in response.content if b.type == "text"]
@@ -232,7 +267,7 @@ def process_day(
             if call.name == "ask_user":
                 # Client-side interactive tool: put the model's question to
                 # the user and feed their answer back as the tool result.
-                answer = ask_user(call.input.get("question", ""))
+                answer = terminal_ask(call.input.get("question", ""))
                 result_text = answer or "(no answer provided)"
             else:
                 result_text = run_tool(call.name, call.input, today=day)

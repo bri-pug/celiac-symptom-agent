@@ -38,7 +38,7 @@ def run_demo(path: str) -> None:
     for day, text in days:
         print(f"\n{'=' * 60}\nDAY {day}\n{'=' * 60}")
         print(f"Log: {text}\n")
-        summary = process_day(text, day=day)
+        summary = process_day(text, day=day, ask_user=False)
         print(f"Agent: {summary}")
 
     print(f"\n{'=' * 60}\nWEEKLY REPORT\n{'=' * 60}")
