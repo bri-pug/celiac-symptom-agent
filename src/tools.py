@@ -119,17 +119,26 @@ TOOL_SCHEMAS = [
             "list any confounders (poor sleep, high stress, travel) "
             "present on the evidence days that you could NOT rule out, and "
             "your confidence must be lower when such confounders are present. "
-            "Re-flagging a hypothesis you have already flagged UPDATES that "
-            "record (merging in the new evidence days) instead of creating a "
-            "duplicate, so it is safe to refine a pattern as more evidence "
-            "accrues. "
+            "Keep `hypothesis` a SHORT, STABLE claim of the form 'X may be linked to Y'. "
+            "Do NOT list specific dates, foods, or a running evidence log in "
+            "the hypothesis text — put every supporting date in `evidence_days` "
+            "instead. Re-flagging an existing hypothesis UPDATES that record in "
+            "place (merging in the new evidence days) only when the hypothesis "
+            "text matches, so reuse the SAME wording as more evidence accrues "
+            "rather than rephrasing it, or you will create a near-duplicate. "
             "Never phrase this as a diagnosis — always frame it as something "
             "worth discussing with a doctor or dietitian."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "hypothesis": {"type": "string"},
+                "hypothesis": {
+                    "type": "string",
+                    "description": (
+                        "A short, stable 'X may be linked to Y' claim. No "
+                        "dates or evidence log here — use evidence_days for that."
+                    ),
+                },
                 "evidence_days": {"type": "array", "items": {"type": "string"}},
                 "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
                 "confounders_not_ruled_out": {
@@ -151,9 +160,29 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
         window = tool_input.get("window_days", 7)
         recent = state.entries[-window:]
         history = [e.model_dump() for e in recent]
-        patterns = [p.model_dump() for p in state.flagged_patterns]
+        # Return only a bounded, compact view of flagged patterns. The purpose
+        # of surfacing these is so the model doesn't re-flag a hypothesis it
+        # already flagged, which only needs the hypothesis text, confidence,
+        # and date — not the full evidence_days/confounders/note payload.
+        # Returning every field of every pattern grew this response without
+        # bound as the log accrued weeks of history.
+        MAX_PATTERNS = 10
+        all_patterns = state.flagged_patterns
+        patterns = [
+            {
+                "hypothesis": p.hypothesis,
+                "confidence": p.confidence,
+                "day_flagged": p.day_flagged,
+            }
+            for p in all_patterns[-MAX_PATTERNS:]
+        ]
+        omitted = max(0, len(all_patterns) - MAX_PATTERNS)
+        result = {"recent_entries": history, "previously_flagged": patterns}
+        if omitted:
+            # Don't silently truncate — tell the model older patterns exist.
+            result["previously_flagged_omitted_older"] = omitted
         import json
-        return json.dumps({"recent_entries": history, "previously_flagged": patterns})
+        return json.dumps(result)
 
     if name == "record_parsed_entry":
         symptoms = [Symptom(**s) for s in tool_input.get("symptoms", [])]

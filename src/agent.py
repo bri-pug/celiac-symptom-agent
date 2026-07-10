@@ -146,6 +146,27 @@ def terminal_ask(question: str) -> str:
         return ""
 
 
+def _missing_required_fields(tool_name: str, tool_input: dict) -> list[str]:
+    """Required fields (per the tool's input_schema) that are absent or empty
+    in a tool call.
+
+    The Anthropic API treats `required` as a strong hint, not a hard
+    constraint, so the model can still emit an incomplete tool call. We check
+    it at the dispatch boundary so every tool implementation can assume its
+    required inputs are present and non-empty — e.g. flag_pattern indexes
+    tool_input["hypothesis"] directly and must never receive a call without it.
+    """
+    schema = next((t for t in TOOL_SCHEMAS if t["name"] == tool_name), None)
+    if schema is None:
+        return []
+    required = schema.get("input_schema", {}).get("required", [])
+    return [
+        field
+        for field in required
+        if tool_input.get(field) in (None, "", [], {})
+    ]
+
+
 def process_day(
     raw_entry: str,
     day: str | None = None,
@@ -210,7 +231,12 @@ def process_day(
             response = _create_with_retry(
                 client,
                 model=MODEL,
-                max_tokens=1500,
+                # A single turn must fit reasoning + a full record_parsed_entry
+                # call (many foods/symptoms/confounders) and possibly a
+                # flag_pattern call. 1500 truncated mid-generation on busy days,
+                # yielding no complete tool_use block -> the loop saw no tools
+                # and cut the turn off before recording (stop_reason=max_tokens).
+                max_tokens=4096,
                 system=system,
                 tools=tools,
                 messages=messages,
@@ -234,6 +260,12 @@ def process_day(
             f"write={usage.cache_creation_input_tokens} "
             f"uncached_input={usage.input_tokens}"
         )
+        # Log why the model stopped. Distinguishing end_turn (genuinely done)
+        # from pause_turn (paused for a server-side tool) and max_tokens
+        # (truncated) is essential: they look identical in tool output but
+        # demand different loop handling, and conflating them silently cut
+        # turns short before record_parsed_entry ran.
+        print(f"  [stop_reason] {response.stop_reason}")
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         text_blocks = [b.text for b in response.content if b.type == "text"]
@@ -254,6 +286,17 @@ def process_day(
             elif b.type == "tool_use":
                 print(f"  [tool call] {b.name}({b.input})")
 
+        # A pause_turn means the model interrupted its OWN turn to let a
+        # server-side tool (e.g. web_search) run — it has NOT finished. Feed
+        # the partial assistant turn back and continue so it resumes; otherwise
+        # the `not tool_uses` check below would treat it as "done" (server
+        # tools emit no client-side tool_use block) and cut the turn off before
+        # it records the day. This was the root cause of days being backfilled
+        # empty by the safety net.
+        if response.stop_reason == "pause_turn":
+            messages.append({"role": "assistant", "content": response.content})
+            continue
+
         if not tool_uses:
             break  # model is done, no more tools requested
 
@@ -263,6 +306,24 @@ def process_day(
         for call in tool_uses:
             if call.name == "web_search":
                 # native tool: Claude executes this server-side, nothing to do
+                continue
+            # Reject incomplete tool calls at the boundary. The model sometimes
+            # omits a schema-required field; rather than let run_tool crash on
+            # the missing key, hand the error back so the model re-issues a
+            # complete call within the same turn.
+            missing = _missing_required_fields(call.name, call.input)
+            if missing:
+                print(f"  [tool rejected] {call.name} missing required: {missing}")
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": call.id,
+                    "content": (
+                        f"Error: {call.name} was called without required "
+                        f"field(s): {', '.join(missing)}. Re-call {call.name} "
+                        f"with every required field present and non-empty."
+                    ),
+                    "is_error": True,
+                })
                 continue
             if call.name == "ask_user":
                 # Client-side interactive tool: put the model's question to
