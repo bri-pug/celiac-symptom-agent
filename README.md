@@ -77,6 +77,9 @@ Or log a single day interactively:
 ```bash
 python -m src.cli --entry "Had ramen with soy sauce for lunch, bloating and
 fatigue started this evening, slept 7hrs last night, no unusual stress."
+
+python -m src.cli --date "2026-07-01" --entry "Had ramen with soy sauce for lunch,
+bloating and fatigue started this evening, slept 7hrs last night, no unusual stress."
 ```
 
 At the end of a run, print the accumulated report:

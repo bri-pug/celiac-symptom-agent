@@ -48,6 +48,7 @@ def run_demo(path: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Symptom-Trigger Pattern Agent")
     parser.add_argument("--entry", help="Log a single day's entry as free text.")
+    parser.add_argument("--date", help="Date to use when logging a single day's entry.")
     parser.add_argument("--demo", help="Path to a synthetic multi-day log to replay.")
     parser.add_argument("--report", action="store_true", help="Print the weekly report.")
     args = parser.parse_args()
@@ -57,8 +58,8 @@ def main():
     elif args.demo:
         run_demo(args.demo)
     elif args.entry:
-        today = date.today().isoformat()
-        print(process_day(args.entry, day=today))
+        day = args.date if args.date else date.today().isoformat()
+        print(process_day(args.entry, day=day))
     else:
         parser.print_help()
         sys.exit(1)
