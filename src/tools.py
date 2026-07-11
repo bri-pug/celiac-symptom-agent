@@ -122,7 +122,10 @@ TOOL_SCHEMAS = [
             "Keep `hypothesis` a SHORT, STABLE claim of the form 'X may be linked to Y'. "
             "Do NOT list specific dates, foods, or a running evidence log in "
             "the hypothesis text — put every supporting date in `evidence_days` "
-            "instead. Re-flagging an existing hypothesis UPDATES that record in "
+            "instead. Likewise, `confounders_not_ruled_out` must be SHORT, STABLE "
+            "category labels ('poor sleep', 'high stress', 'travel', 'illness'), "
+            "NOT dates or per-day narratives — the per-day specifics belong in each "
+            "day's recorded entry, not here. Re-flagging an existing hypothesis UPDATES that record in "
             "place (merging in the new evidence days) only when the hypothesis "
             "text matches, so reuse the SAME wording as more evidence accrues "
             "rather than rephrasing it, or you will create a near-duplicate. "
@@ -144,12 +147,41 @@ TOOL_SCHEMAS = [
                 "confounders_not_ruled_out": {
                     "type": "array",
                     "items": {"type": "string"},
+                    "description": (
+                        "Short, stable confounder category labels present on the "
+                        "evidence days that you could NOT rule out, e.g. 'poor "
+                        "sleep', 'high stress', 'travel', 'illness'. One label per "
+                        "confounder type. Do NOT put dates or per-day narratives "
+                        "here — those belong in each day's recorded entry."
+                    ),
                 },
             },
             "required": ["hypothesis", "evidence_days", "confidence"],
         },
     },
 ]
+
+
+def _clean_confounder_labels(labels: list[str]) -> list[str]:
+    """Normalise confounder labels to short, deduplicated category strings.
+
+    `confounders_not_ruled_out` is meant to hold a handful of stable category
+    labels ("poor sleep", "high stress"), but the model has been prone to
+    cramming date-stamped, per-day narratives in here — and because the merge
+    below unions raw strings, each slightly-different narrative slipped past
+    dedup and the field grew without bound (see the hypothesis-framing skill;
+    this is the same failure mode on a sibling field). Collapsing whitespace
+    and deduping case-insensitively means equivalent labels actually merge, so
+    a flagged pattern accretes evidence days without its confounder list
+    ballooning. First-seen display form is preserved; result is sorted stable.
+    """
+    seen: dict[str, str] = {}
+    for raw in labels:
+        label = " ".join(raw.split())
+        if not label:
+            continue
+        seen.setdefault(label.lower(), label)
+    return sorted(seen.values())
 
 
 def run_tool(name: str, tool_input: dict, today: str) -> str:
@@ -219,8 +251,8 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
         )
         if existing is not None:
             existing.evidence_days = sorted(set(existing.evidence_days) | set(evidence_days))
-            existing.confounders_not_ruled_out = sorted(
-                set(existing.confounders_not_ruled_out) | set(confounders)
+            existing.confounders_not_ruled_out = _clean_confounder_labels(
+                existing.confounders_not_ruled_out + confounders
             )
             existing.confidence = tool_input["confidence"]
             existing.day_flagged = today
@@ -236,7 +268,7 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
             hypothesis=hypothesis,
             evidence_days=sorted(set(evidence_days)),
             confidence=tool_input["confidence"],
-            confounders_not_ruled_out=sorted(set(confounders)),
+            confounders_not_ruled_out=_clean_confounder_labels(confounders),
         )
         state.flagged_patterns.append(pattern)
         save_state(state)

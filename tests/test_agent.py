@@ -166,6 +166,46 @@ def test_flag_pattern_dedups_and_merges(tmp_path, monkeypatch):
     assert p.day_flagged == "2026-07-07"  # updated to last-touched day
 
 
+def test_flag_pattern_normalizes_and_dedupes_confounder_labels(tmp_path, monkeypatch):
+    """Confounder labels are whitespace-normalized and deduped case-insensitively
+    so that re-flagging the same hypothesis can't grow the confounder list with
+    near-duplicate entries (the failure mode that bloated the weekly report)."""
+    state_path = tmp_path / "state.json"
+    monkeypatch.setattr(state_store, "STATE_PATH", str(state_path))
+
+    run_tool(
+        "flag_pattern",
+        {
+            "hypothesis": "Soy sauce may correlate with bloating",
+            "evidence_days": ["2026-07-01", "2026-07-03"],
+            "confidence": "medium",
+            "confounders_not_ruled_out": ["High stress", "poor  sleep", ""],
+        },
+        today="2026-07-04",
+    )
+    run_tool(
+        "flag_pattern",
+        {
+            "hypothesis": "Soy sauce may correlate with bloating",
+            "evidence_days": ["2026-07-05"],
+            "confidence": "medium",
+            # same labels, different casing/whitespace + one genuinely new one
+            "confounders_not_ruled_out": ["high stress", "poor sleep", "travel"],
+        },
+        today="2026-07-05",
+    )
+
+    state = state_store.load_state()
+    assert len(state.flagged_patterns) == 1
+    # "High stress"/"high stress" collapse to one; "poor  sleep"/"poor sleep"
+    # collapse to one; empty dropped; "travel" added. First-seen form preserved.
+    assert state.flagged_patterns[0].confounders_not_ruled_out == [
+        "High stress",
+        "poor sleep",
+        "travel",
+    ]
+
+
 def test_flag_pattern_keeps_distinct_hypotheses_separate(tmp_path, monkeypatch):
     """Genuinely different hypotheses are not collapsed into one."""
     state_path = tmp_path / "state.json"

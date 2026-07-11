@@ -73,7 +73,9 @@ Hard rules:
 - Before flagging any pattern, explicitly check for confounders (poor sleep, \
   high stress, travel, illness) on the evidence days. If a \
   confounder is present and not ruled out, your confidence must be lower, \
-  and you must list it in confounders_not_ruled_out.
+  and you must list it in confounders_not_ruled_out as a SHORT category label \
+  (e.g. "poor sleep", "high stress"), NOT a date-stamped or per-day \
+  description — the per-day detail belongs in that day's recorded entry.
 - Only call flag_pattern when there is real recurring evidence (at least 2 \
   supporting days for medium confidence, 3+ for high). A single day is never \
   enough.
