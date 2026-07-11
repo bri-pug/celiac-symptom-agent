@@ -13,10 +13,11 @@ STATE_PATH = os.path.join(os.path.dirname(__file__), "../data/state.json")
 
 
 def load_state() -> StateFile:
+    """Load persisted entries and flagged patterns, or an empty state if none."""
     if not os.path.exists(STATE_PATH):
         return StateFile()
 
-    with open(STATE_PATH, "r") as f:
+    with open(STATE_PATH, "r", encoding="utf-8") as f:
         raw = json.load(f)
 
     entries = []
@@ -38,8 +39,9 @@ def load_state() -> StateFile:
 
 
 def save_state(state: StateFile) -> None:
+    """Persist entries and flagged patterns to data/state.json."""
     os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w") as f:
+    with open(STATE_PATH, "w", encoding="utf-8") as f:
         data = {
             "entries": [e.model_dump() for e in state.entries],
             "flagged_patterns": [p.model_dump() for p in state.flagged_patterns],

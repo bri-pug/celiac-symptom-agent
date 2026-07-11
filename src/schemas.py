@@ -1,3 +1,5 @@
+"""Pydantic models for the persisted state: daily entries, symptoms,
+confounders, flagged patterns, and the top-level state file."""
 from typing import Optional
 from pydantic import BaseModel
 

@@ -10,8 +10,14 @@ in natural language, but force anything that gets persisted through a
 strict schema.
 """
 
+import json
+
 from .schemas import Entry, Symptom, Confounders, FlaggedPattern
 from .state_store import load_state, save_state
+
+# Cap on how many flagged patterns read_history returns to the model. state.json
+# grows across months, so anything echoed back every call must be bounded.
+MAX_PATTERNS = 10
 
 TOOL_SCHEMAS = [
     {
@@ -119,13 +125,15 @@ TOOL_SCHEMAS = [
             "list any confounders (poor sleep, high stress, travel) "
             "present on the evidence days that you could NOT rule out, and "
             "your confidence must be lower when such confounders are present. "
-            "Keep `hypothesis` a SHORT, STABLE claim of the form 'X may be linked to Y'. "
+            "Keep `hypothesis` a SHORT, STABLE claim of the form "
+            "'X may be linked to Y'. "
             "Do NOT list specific dates, foods, or a running evidence log in "
             "the hypothesis text — put every supporting date in `evidence_days` "
             "instead. Likewise, `confounders_not_ruled_out` must be SHORT, STABLE "
             "category labels ('poor sleep', 'high stress', 'travel', 'illness'), "
             "NOT dates or per-day narratives — the per-day specifics belong in each "
-            "day's recorded entry, not here. Re-flagging an existing hypothesis UPDATES that record in "
+            "day's recorded entry, not here. Re-flagging an existing hypothesis "
+            "UPDATES that record in "
             "place (merging in the new evidence days) only when the hypothesis "
             "text matches, so reuse the SAME wording as more evidence accrues "
             "rather than rephrasing it, or you will create a near-duplicate. "
@@ -198,7 +206,6 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
         # and date — not the full evidence_days/confounders/note payload.
         # Returning every field of every pattern grew this response without
         # bound as the log accrued weeks of history.
-        MAX_PATTERNS = 10
         all_patterns = state.flagged_patterns
         patterns = [
             {
@@ -213,7 +220,6 @@ def run_tool(name: str, tool_input: dict, today: str) -> str:
         if omitted:
             # Don't silently truncate — tell the model older patterns exist.
             result["previously_flagged_omitted_older"] = omitted
-        import json
         return json.dumps(result)
 
     if name == "record_parsed_entry":
