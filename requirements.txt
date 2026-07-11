@@ -1,5 +1,7 @@
-anthropic
-pydantic
-pytest
-pytest-cov
-pylint
+# Runtime:
+anthropic==0.116.0
+pydantic==2.13.4
+# Dev / CI:
+pytest==9.1.1
+pytest-cov==7.1.0
+pylint==4.0.6

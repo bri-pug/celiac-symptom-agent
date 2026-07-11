@@ -7,9 +7,17 @@ something up? record findings? flag a pattern?), we execute those tool
 calls, feed results back, and let it keep going until it produces a final
 text response. This is a genuine multi-step tool-use loop, not a single
 function-calling round trip.
+
+The turn is decomposed into small, independently testable pieces:
+  _build_tools_and_system  -> assemble the (cacheable) prompt prefix
+  _dispatch_tool_calls      -> execute one batch of client-side tool calls
+  _run_turn                 -> drive the create -> tools -> feed-back loop
+`process_day` wires them together. The Anthropic client is injectable so
+the loop can be exercised against a scripted fake in tests, with no network.
 """
 import time
 from datetime import date
+from typing import Callable
 
 from anthropic import (
     Anthropic,
@@ -20,9 +28,20 @@ from anthropic import (
     RateLimitError,
 )
 
+from .schemas import Confounders, Entry
+from .state_store import load_state, save_state
 from .tools import TOOL_SCHEMAS, run_tool
 
 MODEL = "claude-sonnet-5"
+
+# A single turn must fit reasoning + a full record_parsed_entry call (many
+# foods/symptoms/confounders) and possibly a flag_pattern call. 1500 truncated
+# mid-generation on busy days, yielding no complete tool_use block -> the loop
+# saw no tools and cut the turn off before recording (stop_reason=max_tokens).
+MAX_TOKENS = 4096
+# Hard cap so a misbehaving loop can't run forever. Leaves room for a
+# clarify -> re-record round on top of the usual read/record/flag sequence.
+MAX_LOOP_ITERATIONS = 10
 
 # Transient API failures worth retrying. Other APIErrors (bad request, auth,
 # etc.) won't succeed on retry and are re-raised immediately.
@@ -54,7 +73,9 @@ Hard rules:
 - Before flagging any pattern, explicitly check for confounders (poor sleep, \
   high stress, travel, illness) on the evidence days. If a \
   confounder is present and not ruled out, your confidence must be lower, \
-  and you must list it in confounders_not_ruled_out.
+  and you must list it in confounders_not_ruled_out as a SHORT category label \
+  (e.g. "poor sleep", "high stress"), NOT a date-stamped or per-day \
+  description — the per-day detail belongs in that day's recorded entry.
 - Only call flag_pattern when there is real recurring evidence (at least 2 \
   supporting days for medium confidence, 3+ for high). A single day is never \
   enough.
@@ -110,9 +131,6 @@ def _ensure_entry_recorded(day: str, raw_entry: str) -> None:
     day, save a minimal entry that preserves the raw text (so it can be
     re-parsed later) rather than letting the day vanish from history.
     """
-    from .state_store import load_state, save_state
-    from .schemas import Entry, Confounders
-
     state = load_state()
     if any(e.day == day for e in state.entries):
         return  # model already recorded it — nothing to do
@@ -167,124 +185,155 @@ def _missing_required_fields(tool_name: str, tool_input: dict) -> list[str]:
     ]
 
 
-def process_day(
-    raw_entry: str,
-    day: str | None = None,
-    ask_user: bool = True,
-) -> str:
-    """Run one full agent turn for a single day's log entry.
+def _build_tools_and_system(ask_user: bool) -> tuple[list, list]:
+    """Assemble the tool list and the cacheable system prompt for a turn.
 
-    `ask_user` determines if the agent should prompt the user
-    for additional information.
+    When `ask_user` is False we drop the ask_user tool entirely (so the model
+    can't try to prompt a non-interactive caller); when it's True we append the
+    bullet that tells the model when to use it.
+
+    The system prompt is wrapped in a single cache_control block. Render order
+    is tools -> system -> messages, so a breakpoint on the last system block
+    caches the tools AND the system prompt together. This prefix is
+    byte-identical across every loop iteration (and across days, since neither
+    the prompt nor the tools change), while the volatile per-day content lives
+    in `messages` after it. Each day makes several tool round-trips that all
+    re-send this prefix, so the cache is read far more than the ~2-request
+    break-even: a net cost saving, not an increase.
     """
-    day = day or date.today().isoformat()
-
-    # Retries are handled by _create_with_retry (below), so disable the SDK's
-    # own retry layer to keep retry policy in one place.
-    client = Anthropic(max_retries=0)
-
-    messages = [
-        {
-            "role": "user",
-            "content": (
-                f"Today's date: {day}\n"
-                f"Today's log entry:\n{raw_entry}"
-            ),
-        }
-    ]
-
     tools = TOOL_SCHEMAS + [{"type": "web_search_20250305", "name": "web_search"}]
     system_prompt = SYSTEM_PROMPT
-
-    if not ask_user:
-        # If we do no want to prompt the user to add more info,
-        # remove the ask_user tool, which we know exists
-        ask_user_tool_index = [
-            i for i, tool in enumerate(tools) if tool["name"] == "ask_user"
-        ][0]
-        tools.pop(ask_user_tool_index)
-    else:
-        # If we do want to prompt the user to add more info,
-        # add the ask_user bullet to the system prompt
+    if ask_user:
         system_prompt = system_prompt + ASK_USER_BULLET
+    else:
+        tools = [t for t in tools if t["name"] != "ask_user"]
 
-    # Cache the stable prefix (tools + system prompt). Render order is
-    # tools -> system -> messages, so a cache_control breakpoint on the last
-    # system block caches the tools AND the system prompt together. This prefix
-    # is byte-identical across every iteration of the loop below (and across
-    # days, since the prompt and tools don't change), while the volatile
-    # per-day content lives in `messages` after it. Each day makes several tool
-    # round-trips that all re-send this prefix, so the cache is read far more
-    # than the ~2-request break-even: a net cost saving, not an increase.
     system = [
         {"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}
     ]
+    return tools, system
 
-    final_text_parts = []
-    api_error = None
 
-    # The loop: keep going as long as the model wants to call tools.
-    # Cap leaves room for a clarify -> re-record round on top of the usual
-    # read_history / record / flag sequence.
-    for _ in range(10):  # hard cap so a misbehaving loop can't run forever
+def _log_response(response) -> None:
+    """Emit per-call observability: cache hits, stop reason, and every content
+    block (including server-side web_search, which does NOT appear as a
+    client-side tool_use block).
+
+    Cache: `cache_read_input_tokens` should be 0 on the first call (prefix
+    written) and >0 on every later call (prefix served at ~0.1x cost). If it
+    stays 0, the prefix is either below Sonnet's ~2048-token minimum or a
+    silent invalidator is changing it between calls.
+
+    Stop reason: distinguishing end_turn (genuinely done) from pause_turn
+    (paused for a server-side tool) and max_tokens (truncated) is essential —
+    they look identical in tool output but demand different loop handling, and
+    conflating them silently cut turns short before record_parsed_entry ran.
+    """
+    usage = response.usage
+    print(
+        f"  [cache] read={usage.cache_read_input_tokens} "
+        f"write={usage.cache_creation_input_tokens} "
+        f"uncached_input={usage.input_tokens}"
+    )
+    print(f"  [stop_reason] {response.stop_reason}")
+    for b in response.content:
+        if b.type == "server_tool_use":
+            print(f"  [web_search called] query: {b.input.get('query')!r}")
+        elif b.type == "web_search_tool_result":
+            n = len(b.content) if isinstance(b.content, list) else "?"
+            print(f"  [web_search result] {n} result(s) returned")
+        elif b.type == "tool_use":
+            print(f"  [tool call] {b.name}({b.input})")
+
+
+def _dispatch_tool_calls(
+    tool_uses: list,
+    day: str,
+    ask_user_handler: Callable[[str], str],
+) -> list:
+    """Execute one batch of client-side tool calls, returning tool_result
+    blocks to feed back to the model.
+
+    web_search is skipped: it's a native tool Claude runs server-side, so there
+    is nothing for us to execute. Calls missing a schema-required field are
+    rejected at this boundary (an is_error result) so run_tool never crashes on
+    a missing key and the model can re-issue a complete call within the turn.
+    """
+    tool_results = []
+    for call in tool_uses:
+        if call.name == "web_search":
+            continue
+
+        missing = _missing_required_fields(call.name, call.input)
+        if missing:
+            print(f"  [tool rejected] {call.name} missing required: {missing}")
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": call.id,
+                "content": (
+                    f"Error: {call.name} was called without required "
+                    f"field(s): {', '.join(missing)}. Re-call {call.name} "
+                    f"with every required field present and non-empty."
+                ),
+                "is_error": True,
+            })
+            continue
+
+        if call.name == "ask_user":
+            # Client-side interactive tool: put the model's question to the
+            # user and feed their answer back as the tool result.
+            answer = ask_user_handler(call.input.get("question", ""))
+            result_text = answer or "(no answer provided)"
+        else:
+            result_text = run_tool(call.name, call.input, today=day)
+
+        tool_results.append({
+            "type": "tool_result",
+            "tool_use_id": call.id,
+            "content": result_text,
+        })
+    return tool_results
+
+
+def _run_turn(
+    client: Anthropic,
+    system: list,
+    tools: list,
+    messages: list,
+    day: str,
+    ask_user_handler: Callable[[str], str],
+) -> tuple[list[str], APIError | None]:
+    """Drive the create -> execute tools -> feed results loop until the model
+    stops requesting tools (or the iteration cap is hit).
+
+    Returns the accumulated final text blocks and, if the API gave up after
+    retries, the error (so the caller can still run the safety net and report).
+    """
+    final_text_parts: list[str] = []
+    api_error: APIError | None = None
+
+    for _ in range(MAX_LOOP_ITERATIONS):
         try:
             response = _create_with_retry(
                 client,
                 model=MODEL,
-                # A single turn must fit reasoning + a full record_parsed_entry
-                # call (many foods/symptoms/confounders) and possibly a
-                # flag_pattern call. 1500 truncated mid-generation on busy days,
-                # yielding no complete tool_use block -> the loop saw no tools
-                # and cut the turn off before recording (stop_reason=max_tokens).
-                max_tokens=4096,
+                max_tokens=MAX_TOKENS,
                 system=system,
                 tools=tools,
                 messages=messages,
             )
         except APIError as e:
             # Retries exhausted (or a non-retryable error). Don't crash the
-            # whole run — break out so the safety net below still preserves
-            # the raw entry, and a demo replaying many days can continue.
+            # whole run — break out so the safety net still preserves the raw
+            # entry, and a demo replaying many days can continue.
             api_error = e
             print(f"  [api error] giving up on {day} after retries: {e}")
             break
 
-        # Cache observability: `cache_read_input_tokens` should be 0 on the
-        # first call (prefix written) and >0 on every later call in the loop
-        # (prefix served from cache at ~0.1x cost). If it stays 0, the prefix
-        # is either below Sonnet's ~2048-token minimum or a silent invalidator
-        # is changing it between calls.
-        usage = response.usage
-        print(
-            f"  [cache] read={usage.cache_read_input_tokens} "
-            f"write={usage.cache_creation_input_tokens} "
-            f"uncached_input={usage.input_tokens}"
-        )
-        # Log why the model stopped. Distinguishing end_turn (genuinely done)
-        # from pause_turn (paused for a server-side tool) and max_tokens
-        # (truncated) is essential: they look identical in tool output but
-        # demand different loop handling, and conflating them silently cut
-        # turns short before record_parsed_entry ran.
-        print(f"  [stop_reason] {response.stop_reason}")
+        _log_response(response)
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
-        text_blocks = [b.text for b in response.content if b.type == "text"]
-        final_text_parts.extend(text_blocks)
-
-        # Log every block type so tool usage is observable, including
-        # server-side tools like web_search which do NOT show up as
-        # type == "tool_use" (they're "server_tool_use" /
-        # "web_search_tool_result"). Without this, web_search calls happen
-        # invisibly inside the API response and you can't tell whether the
-        # model is using it judiciously or not at all.
-        for b in response.content:
-            if b.type == "server_tool_use":
-                print(f"  [web_search called] query: {b.input.get('query')!r}")
-            elif b.type == "web_search_tool_result":
-                n = len(b.content) if isinstance(b.content, list) else "?"
-                print(f"  [web_search result] {n} result(s) returned")
-            elif b.type == "tool_use":
-                print(f"  [tool call] {b.name}({b.input})")
+        final_text_parts.extend(b.text for b in response.content if b.type == "text")
 
         # A pause_turn means the model interrupted its OWN turn to let a
         # server-side tool (e.g. web_search) run — it has NOT finished. Feed
@@ -302,46 +351,50 @@ def process_day(
 
         messages.append({"role": "assistant", "content": response.content})
 
-        tool_results = []
-        for call in tool_uses:
-            if call.name == "web_search":
-                # native tool: Claude executes this server-side, nothing to do
-                continue
-            # Reject incomplete tool calls at the boundary. The model sometimes
-            # omits a schema-required field; rather than let run_tool crash on
-            # the missing key, hand the error back so the model re-issues a
-            # complete call within the same turn.
-            missing = _missing_required_fields(call.name, call.input)
-            if missing:
-                print(f"  [tool rejected] {call.name} missing required: {missing}")
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": call.id,
-                    "content": (
-                        f"Error: {call.name} was called without required "
-                        f"field(s): {', '.join(missing)}. Re-call {call.name} "
-                        f"with every required field present and non-empty."
-                    ),
-                    "is_error": True,
-                })
-                continue
-            if call.name == "ask_user":
-                # Client-side interactive tool: put the model's question to
-                # the user and feed their answer back as the tool result.
-                answer = terminal_ask(call.input.get("question", ""))
-                result_text = answer or "(no answer provided)"
-            else:
-                result_text = run_tool(call.name, call.input, today=day)
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": call.id,
-                "content": result_text,
-            })
-
+        tool_results = _dispatch_tool_calls(tool_uses, day, ask_user_handler)
         if tool_results:
             messages.append({"role": "user", "content": tool_results})
         elif response.stop_reason == "end_turn":
             break
+
+    return final_text_parts, api_error
+
+
+def process_day(
+    raw_entry: str,
+    day: str | None = None,
+    ask_user: bool = True,
+    client: Anthropic | None = None,
+    ask_user_handler: Callable[[str], str] | None = None,
+) -> str:
+    """Run one full agent turn for a single day's log entry.
+
+    `ask_user` determines if the agent should prompt the user for additional
+    information. `client` and `ask_user_handler` are injectable for testing —
+    in normal use they default to a fresh Anthropic client and the terminal
+    prompt.
+    """
+    day = day or date.today().isoformat()
+    # Retries are handled by _create_with_retry, so disable the SDK's own retry
+    # layer to keep retry policy in one place.
+    client = client or Anthropic(max_retries=0)
+    ask_user_handler = ask_user_handler or terminal_ask
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"Today's date: {day}\n"
+                f"Today's log entry:\n{raw_entry}"
+            ),
+        }
+    ]
+
+    tools, system = _build_tools_and_system(ask_user)
+
+    final_text_parts, api_error = _run_turn(
+        client, system, tools, messages, day, ask_user_handler
+    )
 
     # Safety net: never let a day silently drop out of history, even if the
     # model failed to call record_parsed_entry above (including when the API
@@ -358,7 +411,6 @@ def process_day(
 
 def weekly_report() -> str:
     """Render the accumulated flagged patterns as a plain-text report."""
-    from .state_store import load_state
     state = load_state()
 
     if not state.flagged_patterns:

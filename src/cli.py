@@ -12,13 +12,14 @@ Usage:
 
 import argparse
 import sys
-from datetime import date, timedelta
+from datetime import date
 
 from .agent import process_day, weekly_report
 
 
 def run_demo(path: str) -> None:
-    with open(path, "r") as f:
+    """Replay a synthetic multi-day log, running one agent turn per day."""
+    with open(path, "r", encoding="utf-8") as f:
         raw = f.read()
 
     # Each day in the sample file is separated by a line starting with "DAY:"
@@ -46,6 +47,7 @@ def run_demo(path: str) -> None:
 
 
 def main():
+    """Parse CLI args and dispatch to report / demo / single-entry logging."""
     parser = argparse.ArgumentParser(description="Symptom-Trigger Pattern Agent")
     parser.add_argument("--entry", help="Log a single day's entry as free text.")
     parser.add_argument("--date", help="Date to use when logging a single day's entry.")
