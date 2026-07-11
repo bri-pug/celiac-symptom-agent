@@ -15,6 +15,7 @@ The turn is decomposed into small, independently testable pieces:
 `process_day` wires them together. The Anthropic client is injectable so
 the loop can be exercised against a scripted fake in tests, with no network.
 """
+import logging
 import time
 from datetime import date
 from typing import Callable
@@ -31,6 +32,8 @@ from anthropic import (
 from .schemas import Confounders, Entry
 from .state_store import load_state, save_state
 from .tools import TOOL_SCHEMAS, run_tool
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-5"
 
@@ -113,9 +116,9 @@ def _create_with_retry(client: Anthropic, **kwargs):
         except _RETRYABLE_ERRORS as e:
             if attempt == _MAX_API_ATTEMPTS:
                 raise
-            print(
-                f"  [retry] transient API error ({type(e).__name__}); "
-                f"attempt {attempt}/{_MAX_API_ATTEMPTS}, retrying in {delay:.0f}s"
+            logger.warning(
+                "[retry] transient API error (%s); attempt %d/%d, retrying in %.0fs",
+                type(e).__name__, attempt, _MAX_API_ATTEMPTS, delay,
             )
             time.sleep(delay)
             delay *= 2
@@ -135,9 +138,9 @@ def _ensure_entry_recorded(day: str, raw_entry: str) -> None:
     if any(e.day == day for e in state.entries):
         return  # model already recorded it — nothing to do
 
-    print(
-        f"  [safety net] model recorded no entry for {day}; saving raw text "
-        f"as a minimal fallback so the day isn't lost from history."
+    logger.warning(
+        "[safety net] model recorded no entry for %s; saving raw text as a "
+        "minimal fallback so the day isn't lost from history.", day,
     )
     state.entries.append(Entry(
         day=day,
@@ -230,20 +233,21 @@ def _log_response(response) -> None:
     conflating them silently cut turns short before record_parsed_entry ran.
     """
     usage = response.usage
-    print(
-        f"  [cache] read={usage.cache_read_input_tokens} "
-        f"write={usage.cache_creation_input_tokens} "
-        f"uncached_input={usage.input_tokens}"
+    logger.debug(
+        "[cache] read=%s write=%s uncached_input=%s",
+        usage.cache_read_input_tokens,
+        usage.cache_creation_input_tokens,
+        usage.input_tokens,
     )
-    print(f"  [stop_reason] {response.stop_reason}")
+    logger.debug("[stop_reason] %s", response.stop_reason)
     for b in response.content:
         if b.type == "server_tool_use":
-            print(f"  [web_search called] query: {b.input.get('query')!r}")
+            logger.info("[web_search called] query: %r", b.input.get("query"))
         elif b.type == "web_search_tool_result":
             n = len(b.content) if isinstance(b.content, list) else "?"
-            print(f"  [web_search result] {n} result(s) returned")
+            logger.info("[web_search result] %s result(s) returned", n)
         elif b.type == "tool_use":
-            print(f"  [tool call] {b.name}({b.input})")
+            logger.info("[tool call] %s(%s)", b.name, b.input)
 
 
 def _dispatch_tool_calls(
@@ -266,7 +270,7 @@ def _dispatch_tool_calls(
 
         missing = _missing_required_fields(call.name, call.input)
         if missing:
-            print(f"  [tool rejected] {call.name} missing required: {missing}")
+            logger.warning("[tool rejected] %s missing required: %s", call.name, missing)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": call.id,
@@ -327,7 +331,7 @@ def _run_turn(
             # whole run — break out so the safety net still preserves the raw
             # entry, and a demo replaying many days can continue.
             api_error = e
-            print(f"  [api error] giving up on {day} after retries: {e}")
+            logger.error("[api error] giving up on %s after retries: %s", day, e)
             break
 
         _log_response(response)

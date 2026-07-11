@@ -11,10 +11,25 @@ Usage:
 """
 
 import argparse
+import logging
 import sys
 from datetime import date
 
 from .agent import process_day, weekly_report
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Route the agent's diagnostic logs to the console.
+
+    Default (INFO) shows the agent's actions — tool calls, web searches — plus
+    any warnings/errors. `--verbose` (DEBUG) adds the low-level per-call cache
+    and stop-reason diagnostics. The two-space prefix keeps trace lines nested
+    visually under the day banners printed by run_demo.
+    """
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="  %(message)s",
+    )
 
 
 def run_demo(path: str) -> None:
@@ -53,7 +68,13 @@ def main():
     parser.add_argument("--date", help="Date to use when logging a single day's entry.")
     parser.add_argument("--demo", help="Path to a synthetic multi-day log to replay.")
     parser.add_argument("--report", action="store_true", help="Print the weekly report.")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true",
+        help="Show low-level per-call diagnostics (cache hits, stop reasons).",
+    )
     args = parser.parse_args()
+
+    _configure_logging(args.verbose)
 
     if args.report:
         print(weekly_report())
