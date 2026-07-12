@@ -10,6 +10,56 @@ for you to raise with your doctor or dietitian. It explicitly tracks confounders
 (sleep, stress, travel, etc.) and lowers its confidence when it can't rule
 them out, rather than presenting a bare conclusion.
 
+## What a flagged pattern looks like
+
+Running the bundled demo over the sample log, the agent works one day at a time,
+reads back over its history before drawing any conclusion, and ends each turn
+with a plain-language summary. Here it picks up a planted correlation — regular
+(non–gluten-free) soy sauce tracking with bloating and fatigue — while being
+careful about a confounder and about the days that *don't* fit (abridged; exact
+wording varies run to run):
+
+```
+============================================================
+DAY 2026-07-04
+============================================================
+Log: Big work deadline today, very stressed, only slept 4 hours last
+night. Ate plain grilled fish and rice. Felt bloated and fatigued again
+this afternoon.
+
+Agent: Recorded today's entry. Bloating + fatigue recurred, but today's meals
+were gluten-free and you noted only 4 hours of sleep and high stress — both of
+which can cause these symptoms on their own. Checking the last few days, the
+same symptoms followed regular soy sauce on 07-01 and 07-03. I'm flagging a
+possible link, but keeping confidence at medium because today's flare is
+confounded by poor sleep and stress.
+
+============================================================
+DAY 2026-07-05
+============================================================
+Log: Slept 8 hours, low stress, no travel. Had GF soy sauce again with
+sushi at lunch. Felt totally fine, no symptoms.
+
+Agent: Recorded today's entry. This is a useful counter-example: gluten-free
+soy sauce with good sleep and low stress, and no symptoms — consistent with the
+hypothesis being about regular soy sauce specifically, not soy sauce in general.
+Nothing new to flag today.
+
+============================================================
+WEEKLY REPORT
+============================================================
+Flagged patterns to discuss with your doctor/dietitian:
+
+- Regular (non-GF) soy sauce may be linked to bloating and fatigue (confidence: medium)
+  Evidence days: 2026-07-01, 2026-07-03, 2026-07-04
+  Confounders not ruled out: poor sleep, high stress
+```
+
+Note what it does *not* do: it doesn't blame the gluten-free tamari day, and it
+doesn't claim certainty — the poor-sleep/high-stress day is listed as a
+confounder it couldn't rule out, which is exactly why confidence stays at
+`medium` rather than `high`.
+
 ## Why this is "agentic" and not just a script
 
 A plain script could compute food/symptom correlations in a spreadsheet. This project
