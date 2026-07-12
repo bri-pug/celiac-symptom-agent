@@ -8,7 +8,7 @@ import json
 import os
 import tempfile
 
-from .schemas import StateFile, Entry, FlaggedPattern, Symptom, Confounders
+from .schemas import StateFile
 
 STATE_PATH = os.path.join(os.path.dirname(__file__), "../data/state.json")
 
@@ -19,36 +19,15 @@ def load_state() -> StateFile:
         return StateFile()
 
     with open(STATE_PATH, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-
-    entries = []
-    for e in raw.get("entries", []):
-        symptoms = [Symptom(**s) for s in e.get("symptoms", [])]
-        confounders = Confounders(**e.get("confounders", {}))
-        entries.append(Entry(
-            day=e["day"],
-            raw_text=e["raw_text"],
-            foods=e.get("foods", []),
-            symptoms=symptoms,
-            confounders=confounders,
-            clarifications=e.get("clarifications", []),
-        ))
-
-    patterns = [FlaggedPattern(**p) for p in raw.get("flagged_patterns", [])]
-
-    return StateFile(entries=entries, flagged_patterns=patterns)
+        return StateFile.model_validate(json.load(f))
 
 
 def save_state(state: StateFile) -> None:
     """Persist entries and flagged patterns to data/state.json, atomically.
 
-    This file is the agent's entire memory, so a torn write is catastrophic: a
-    crash or a concurrent reader mid-write would leave (or observe) truncated,
-    unparseable JSON and lose the whole history. We therefore write to a temp
-    file in the same directory, fsync it, and os.replace() it into place —
-    os.replace is atomic on a POSIX filesystem, so readers only ever see the
-    complete old file or the complete new one. Output is indented so the
-    committed state stays diff-friendly.
+    This file is the agent's entire memory, so a torn write is catastrophic.
+    Write to a temp file, fsync it, and os.replace() it into place.
+    Output is indented so the committed state stays diff-friendly.
     """
     directory = os.path.dirname(STATE_PATH)
     os.makedirs(directory, exist_ok=True)

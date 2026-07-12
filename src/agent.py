@@ -333,7 +333,7 @@ def _log_turn_cost(day: str, totals: dict[str, int]) -> None:
     cost = sum(totals[k] * _USD_PER_MTOK[k] for k in totals) / 1_000_000
     logger.info(
         "[usage] %s cost ~%d tokens (input=%d cache_read=%d cache_write=%d "
-        "output=%d), ~$%.4f",
+        "output=%d), ~$%.4f\n",
         day, total_tokens,
         totals["input"], totals["cache_read"], totals["cache_write"],
         totals["output"], cost,
