@@ -21,9 +21,9 @@ class Confounders(BaseModel):
 class Entry(BaseModel):
     day: str  # YYYY-MM-DD
     raw_text: str
-    foods: list[str]
-    symptoms: list[Symptom]
-    confounders: Confounders
+    foods: list[str] = []
+    symptoms: list[Symptom] = []
+    confounders: Confounders = Confounders()
     # Resolved "was this X gluten-free?" exchanges, saved as human-readable
     # "Q: ... A: ..." strings so a later re-run can see how an ambiguous
     # food was disambiguated. Optional/additive: old state.json files that

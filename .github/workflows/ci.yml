@@ -33,4 +33,4 @@ jobs:
         run: pytest -q --cov=src --cov-report=term-missing
 
       - name: Lint
-        run: pylint src/
+        run: pylint src/ tests/

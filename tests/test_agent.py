@@ -1,3 +1,4 @@
+# pylint: disable=missing-function-docstring,protected-access,too-few-public-methods,unused-argument
 """
 Tests focused on the parts that don't require hitting the live API:
 state persistence and tool execution. The confounder-aware confidence
@@ -5,12 +6,11 @@ judgment itself lives in the model's reasoning (guided by the system
 prompt), not in deterministic code, so it's validated via the demo script
 and manual review of the transcript rather than a unit test — see README.
 """
-import os
-import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+import httpx
+from anthropic import APIConnectionError
 
-from src import state_store
+from src import agent, state_store
 from src.agent import _ensure_entry_recorded
 from src.tools import run_tool
 
@@ -227,11 +227,6 @@ def test_flag_pattern_keeps_distinct_hypotheses_separate(tmp_path, monkeypatch):
 def test_create_with_retry_recovers_from_transient_error(monkeypatch):
     """The API retry wrapper retries transient errors with backoff and
     returns the eventual success, instead of throwing away the turn."""
-    import httpx
-    from anthropic import APIConnectionError
-
-    from src import agent
-
     monkeypatch.setattr(agent.time, "sleep", lambda _s: None)  # no real waiting
 
     req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")

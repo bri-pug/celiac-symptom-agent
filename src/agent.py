@@ -37,6 +37,18 @@ logger = logging.getLogger(__name__)
 
 MODEL = "claude-sonnet-5"
 
+# Approximate USD price per million tokens for MODEL, used only for the per-day
+# cost estimate logged at the end of each turn. Cache reads bill at ~0.1x the
+# input rate, and the 5-minute cache writes this agent's prefix uses bill at
+# ~1.25x. A rough cost signal, not billing-accurate — update if the model or
+# Anthropic's pricing changes.
+_USD_PER_MTOK = {
+    "input": 3.00,
+    "cache_read": 0.30,
+    "cache_write": 3.75,
+    "output": 15.00,
+}
+
 # A single turn must fit reasoning + a full record_parsed_entry call (many
 # foods/symptoms/confounders) and possibly a flag_pattern call. 1500 truncated
 # mid-generation on busy days, yielding no complete tool_use block -> the loop
@@ -299,6 +311,35 @@ def _dispatch_tool_calls(
     return tool_results
 
 
+def _accumulate_usage(totals: dict[str, int], response) -> None:
+    """Fold one response's token usage into the running per-turn totals.
+
+    A turn makes several API round-trips (read history, record, maybe flag);
+    each reports its own usage. Summing them lets us report what the whole day
+    cost. Cache fields can be absent/None on some responses, hence `or 0`.
+    """
+    usage = response.usage
+    totals["input"] += usage.input_tokens
+    totals["cache_read"] += usage.cache_read_input_tokens or 0
+    totals["cache_write"] += usage.cache_creation_input_tokens or 0
+    totals["output"] += usage.output_tokens
+
+
+def _log_turn_cost(day: str, totals: dict[str, int]) -> None:
+    """Emit a one-line token + approximate-cost summary for the whole turn."""
+    total_tokens = sum(totals.values())
+    if total_tokens == 0:
+        return  # no successful calls (e.g. the API failed before any response)
+    cost = sum(totals[k] * _USD_PER_MTOK[k] for k in totals) / 1_000_000
+    logger.info(
+        "[usage] %s cost ~%d tokens (input=%d cache_read=%d cache_write=%d "
+        "output=%d), ~$%.4f\n",
+        day, total_tokens,
+        totals["input"], totals["cache_read"], totals["cache_write"],
+        totals["output"], cost,
+    )
+
+
 def _run_turn(
     client: Anthropic,
     system: list,
@@ -315,6 +356,7 @@ def _run_turn(
     """
     final_text_parts: list[str] = []
     api_error: APIError | None = None
+    usage_totals = {"input": 0, "cache_read": 0, "cache_write": 0, "output": 0}
 
     for _ in range(MAX_LOOP_ITERATIONS):
         try:
@@ -335,6 +377,7 @@ def _run_turn(
             break
 
         _log_response(response)
+        _accumulate_usage(usage_totals, response)
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         final_text_parts.extend(b.text for b in response.content if b.type == "text")
@@ -361,6 +404,7 @@ def _run_turn(
         elif response.stop_reason == "end_turn":
             break
 
+    _log_turn_cost(day, usage_totals)
     return final_text_parts, api_error
 
 

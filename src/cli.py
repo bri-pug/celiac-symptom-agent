@@ -18,18 +18,41 @@ from datetime import date
 from .agent import process_day, weekly_report
 
 
+class _ColorFormatter(logging.Formatter):
+    """Prefix each level's message with an ANSI color and reset it after."""
+
+    _RESET = "\033[0m"
+    _COLORS = {
+        logging.DEBUG: "\033[94m",     # blue
+        logging.INFO: "\033[32m",      # green
+        logging.WARNING: "\033[33m",   # yellow
+        logging.ERROR: "\033[31m",     # red
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        color = self._COLORS.get(record.levelno)
+        return f"{color}{message}{self._RESET}" if color else message
+
+
 def _configure_logging(verbose: bool) -> None:
-    """Route the agent's diagnostic logs to the console.
+    """Route only this application's diagnostic logs to the console.
 
     Default (INFO) shows the agent's actions — tool calls, web searches — plus
     any warnings/errors. `--verbose` (DEBUG) adds the low-level per-call cache
     and stop-reason diagnostics. The two-space prefix keeps trace lines nested
     visually under the day banners printed by run_demo.
     """
-    logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="  %(message)s",
-    )
+    handler = logging.StreamHandler()
+    handler.setFormatter(_ColorFormatter("  %(message)s"))
+
+    # Only displays logs from this application
+    # Hides logs from third-party libraries
+    app_logger = logging.getLogger("src")
+    app_logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    app_logger.handlers.clear()
+    app_logger.addHandler(handler)
+    app_logger.propagate = False
 
 
 def run_demo(path: str) -> None:

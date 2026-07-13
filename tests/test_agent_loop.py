@@ -1,3 +1,4 @@
+# pylint: disable=missing-function-docstring,redefined-outer-name,unused-argument,too-few-public-methods
 """
 Tests for the agent orchestration loop itself (`process_day` / `_run_turn`).
 
@@ -7,15 +8,12 @@ can assert the loop drives tools, threads messages back, honours stop reasons,
 rejects malformed tool calls, and respects its iteration cap — the behaviour
 that used to be checked only by manually eyeballing a live transcript.
 """
-import os
-import sys
+
 from types import SimpleNamespace
 
 import httpx
 import pytest
 from anthropic import APIError
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src import agent, state_store
 
@@ -27,6 +25,7 @@ def _usage():
         cache_read_input_tokens=0,
         cache_creation_input_tokens=0,
         input_tokens=0,
+        output_tokens=0,
     )
 
 
@@ -34,8 +33,8 @@ def _text(text):
     return SimpleNamespace(type="text", text=text)
 
 
-def _tool_use(name, tool_input, id="t1"):
-    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=id)
+def _tool_use(name, tool_input, id_="t1"):
+    return SimpleNamespace(type="tool_use", name=name, input=tool_input, id=id_)
 
 
 def _response(content, stop_reason="end_turn"):
