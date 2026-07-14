@@ -1988,7 +1988,7 @@
       "raw_text": "(recorded via record_parsed_entry)",
       "foods": [
         "GF breakfast burrito (eggs, sausage)",
-        "salad with grilled chicken",
+        "salad with grilled salmon",
         "steak",
         "potatoes"
       ],
@@ -2031,11 +2031,79 @@
       "clarifications": [
         "Q: Was the papusa (and the restaurant's prep of it) confirmed gluten-free, or was it a regular restaurant order without a GF confirmation? A: It was labeled gluten-free, but there could have been cross contamination as the restaurant itself was not gluten-free."
       ]
+    },
+    {
+      "day": "2026-07-11",
+      "raw_text": "(recorded via record_parsed_entry)",
+      "foods": [
+        "Thai yellow curry with chicken (GF confirmed, non-GF restaurant, leftover)",
+        "white rice",
+        "broccoli",
+        "Caesar salad (no croutons, GF dressing)",
+        "grilled salmon"
+      ],
+      "symptoms": [],
+      "confounders": {
+        "sleep_hours": null,
+        "stress_level": null,
+        "travel": false,
+        "other": "Skipped breakfast; no symptoms reported today."
+      },
+      "clarifications": [
+        "Q: For the Caesar salad \u2014 did it include regular croutons and standard Caesar dressing, or was it a gluten-free version (no croutons / GF dressing)? A: no croutons, GF dressing"
+      ]
+    },
+    {
+      "day": "2026-07-12",
+      "raw_text": "(recorded via record_parsed_entry)",
+      "foods": [
+        "GF bagel",
+        "GF sandwich",
+        "soup (labeled GF)",
+        "salad"
+      ],
+      "symptoms": [],
+      "confounders": {
+        "sleep_hours": 7.5,
+        "stress_level": 1,
+        "travel": false,
+        "other": "Felt okay all day, slept ok."
+      },
+      "clarifications": [
+        "Q: What kind of soup did you have for dinner \u2014 was it a broth/soup you know to be gluten-free, or a regular restaurant/canned soup where gluten content is unclear? A: labeled GF"
+      ]
+    },
+    {
+      "day": "2026-07-13",
+      "raw_text": "(recorded via record_parsed_entry)",
+      "foods": [
+        "GF breakfast burrito (eggs, sausage)",
+        "salad with grilled salmon",
+        "steak",
+        "potatoes",
+        "GF cake (restaurant, kitchen dedication unconfirmed)"
+      ],
+      "symptoms": [
+        {
+          "name": "bloating",
+          "severity": 3,
+          "onset": "evening"
+        }
+      ],
+      "confounders": {
+        "sleep_hours": 8.0,
+        "stress_level": 1,
+        "travel": false,
+        "other": "No stress reported."
+      },
+      "clarifications": [
+        "Q: Was the gluten-free cake from a dedicated gluten-free restaurant/bakery, or from a regular restaurant with a shared (non-GF) kitchen? A: No answer provided by user."
+      ]
     }
   ],
   "flagged_patterns": [
     {
-      "day_flagged": "2026-07-10",
+      "day_flagged": "2026-07-13",
       "hypothesis": "Restaurant-prepared or store-bought foods labeled 'gluten-free' may be linked to GI/fatigue symptoms, possibly due to mislabeling or cross-contamination",
       "evidence_days": [
         "2026-05-05",
@@ -2060,7 +2128,8 @@
         "2026-06-18",
         "2026-06-23",
         "2026-06-24",
-        "2026-07-10"
+        "2026-07-10",
+        "2026-07-13"
       ],
       "confidence": "medium",
       "confounders_not_ruled_out": [
